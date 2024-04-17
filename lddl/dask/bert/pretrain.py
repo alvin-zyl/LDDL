@@ -572,7 +572,7 @@ def main(args):
 
   if args.schedule == 'mpi':
     from dask_mpi import initialize
-    initialize(local_directory='/tmp/dask-worker-space', nanny=False)
+    initialize(local_directory='/tmp/dask-worker-space', nanny=False, memory_limit=0.95)
     client = dask.distributed.Client()
   else:
     client = dask.distributed.Client(
