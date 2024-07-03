@@ -13,6 +13,7 @@ docker run \
   --network=host \
   --ipc=host \
   -v $PWD:/workspace/lddl \
+  -v /data/alvinliu:/dataset \
   ${MOUNTS} \
   ${IMAGE} \
   ${CMD}
