@@ -84,6 +84,10 @@ class Document:
         return self._sentences[idx]
 
 
+def split_code(code, separator="\n"):
+    return code.split(separator)
+
+
 def _get_documents(bag_texts, tokenizer, max_length=512):
 
     def _tokenize(s):
@@ -95,7 +99,7 @@ def _get_documents(bag_texts, tokenizer, max_length=512):
             None,
             map(
                 lambda s: s.replace("\r\n", "").strip(),
-                [text],
+                split_code(text),
             ),
         )
 
@@ -289,7 +293,7 @@ def create_pairs_from_document(
     document = all_documents[document_index]
 
     # Account for [CLS], [SEP], [SEP]
-    max_num_tokens = max_seq_length - 1
+    max_num_tokens = max_seq_length - 2
 
     # We *usually* want to fill up the entire sequence since we are padding
     # to `max_seq_length` anyways, so short sequences are generally wasted
@@ -319,10 +323,15 @@ def create_pairs_from_document(
             if current_chunk:
                 # `a_end` is how many segments from `current_chunk` go into the `A`
                 # (first) sentence.
-                a_end = 1
+                if current_length > max_num_tokens and len(current_chunk) > 1:
+                    end = len(current_chunk) - 1
+                    stay_chunk_idx = [-1]
+                else:
+                    end = len(current_chunk)
+                    stay_chunk_idx = []
 
                 tokens_code = []
-                for j in range(a_end):
+                for j in range(end):
                     tokens_code.extend(current_chunk[j]._tokens)
 
                 _truncate_seq(tokens_code, max_num_tokens)
@@ -334,8 +343,10 @@ def create_pairs_from_document(
                     "num_tokens": len(tokens_code),
                 }
                 instances.append(instance)
-            current_chunk = []
-            current_length = 0
+            current_chunk = [current_chunk[i] for i in stay_chunk_idx]
+            current_length = (
+                sum([len(item) for item in current_chunk]) if current_chunk else 0
+            )
         i += 1
 
     return instances
@@ -641,7 +652,7 @@ runtime with convergence impact.
         "--bin-size": None,
         "--sample-ratio": 0.9,
         "--seed": 12345,
-        "--duplicate-factor": 5,
+        "--duplicate-factor": 1,
         "--vocab-file": "bert-large-uncased",
         "--masked-lm-ratio": 0.15,
     }

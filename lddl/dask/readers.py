@@ -58,13 +58,12 @@ def estimate_block_size(paths, num_blocks):
 
 
 def _read_bag_of_text(
-    path,
-    blocksize=None,
-    sample_ratio=1.0,
-    sample_seed=12345,
+    path, blocksize=None, sample_ratio=1.0, sample_seed=12345, linedelimiter=None
 ):
     input_files = _find_files_under(path)
-    bag_strs = db.read_text(input_files, blocksize=blocksize)
+    bag_strs = db.read_text(
+        input_files, blocksize=blocksize, linedelimiter=linedelimiter
+    )
     bag_strs = _filter_empty_strs(bag_strs)
     if sample_ratio < 1.0:
         bag_strs = bag_strs.random_sample(sample_ratio, random_state=sample_seed)
@@ -129,16 +128,14 @@ def read_open_webtext(
 
 
 def read_code(
-    path,
-    blocksize=None,
-    sample_ratio=1.0,
-    sample_seed=12345,
+    path, blocksize=None, sample_ratio=1.0, sample_seed=12345, linedelimiter="\r\n"
 ):
     return _read_bag_of_text(
         path,
         blocksize=blocksize,
         sample_ratio=sample_ratio,
         sample_seed=sample_seed,
+        linedelimiter=linedelimiter,
     )
 
 
