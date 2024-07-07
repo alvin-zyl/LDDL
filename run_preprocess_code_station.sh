@@ -27,9 +27,9 @@ echo "Start balance phase 1"
           --indir /dataset/codebert/pretrain/phase1 \
           --num-shards 4096
 
-  echo "Finished balance phase 1"
+echo "Finished balance phase 1"
 
-  echo "Start preprocessing phase 2"
+echo "Start preprocessing phase 2"
 docker run --rm --shm-size="4096m" -v "$PWD:/workspace/lddl" -v "/data/alvinliu:/dataset" lddl \
     mpirun \
     -np 64 \
@@ -56,4 +56,4 @@ echo "Start balance phase 2"
           --indir /dataset/codebert/pretrain/phase2 \
           --num-shards 4096
 
-  echo "Finished balance phase 2"
+echo "Finished balance phase 2"
