@@ -142,7 +142,6 @@ dask-worker-space/
 
 # Data downloaded and generated when running the examples.
 data/
-codebert_52000
 codebert_100000
 .vscode
 target_path
