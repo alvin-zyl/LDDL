@@ -145,3 +145,10 @@ def split_id_text(raw_text):
     while i < len(raw_text) and not raw_text[i].isspace():
         i += 1
     return raw_text[:i], raw_text[i + 1 :]
+
+
+def split_id_code_comment(raw_text):
+    i = 0
+    while i < len(raw_text) and not raw_text[i].isspace():
+        i += 1
+    return raw_text[:i], *raw_text[i + 1 :].split("<COMMENT>")

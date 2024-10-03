@@ -44,6 +44,7 @@ from ..readers import (
     read_common_crawl,
     split_id_text,
     estimate_block_size,
+    split_id_code_comment,
 )
 from lddl.utils import (
     expand_outdir_and_mkdir,
@@ -84,6 +85,25 @@ class Document:
         return self._sentences[idx]
 
 
+class CodePair:
+
+    def __init__(self, doc_id, sentences, comment):
+        self._id = doc_id
+        self._sentences = sentences
+        self._comment = comment
+
+    def __repr__(self):
+        return "Code(_id={}, _comment={}, _sentences={})".format(
+            self._id, self._comment, self._sentences
+        )
+
+    def __len__(self):
+        return len(self._sentences)
+
+    def __getitem__(self, idx):
+        return self._sentences[idx]
+
+
 def split_code(code, separator="\n"):
     return code.split(separator)
 
@@ -99,7 +119,7 @@ def _get_documents(bag_texts, tokenizer, max_length=512):
             None,
             map(
                 lambda s: s.replace("\r\n", "").strip(),
-                split_code(text),
+                [text],
             ),
         )
 
@@ -113,6 +133,38 @@ def _get_documents(bag_texts, tokenizer, max_length=512):
         return document
 
     return bag_texts.map(_to_document).filter(lambda d: len(d._sentences) > 0)
+
+
+def _get_code_pairs(bag_texts, tokenizer, max_length=512):
+
+    def _tokenize(s):
+        return tokenizer.tokenize(s, max_length=max_length, truncation=True)
+
+    def _to_code_pair(raw_text):
+        doc_id, comment, code = split_id_code_comment(raw_text)
+        sentence_strs = filter(
+            None,
+            map(
+                lambda s: s.replace("\r\n", "").strip(),
+                split_code(code),
+            ),
+        )
+
+        sentences = (
+            Sentence(tuple(tokens))
+            for tokens in (_tokenize(sentence_str) for sentence_str in sentence_strs)
+            if len(tokens) > 0
+        )
+        comment = Sentence(tuple(_tokenize(comment)))
+
+        document = CodePair(
+            doc_id,
+            tuple(sentences),
+            comment,
+        )
+        return document
+
+    return bag_texts.map(_to_code_pair).filter(lambda d: len(d._sentences) > 0)
 
 
 def _shuffle_bag_texts(bag_texts):
@@ -195,10 +247,10 @@ def _truncate_seq(tokens, max_num_tokens):
 
         # We want to sometimes truncate from the front and sometimes from the
         # back to add more randomness and avoid biases.
-        if random.random() < 0.5:
-            del tokens[0]
-        else:
-            tokens.pop()
+        # if random.random() < 0.5:
+        #     del tokens[0]
+        # else:
+        tokens.pop()
 
 
 def _truncate_seq_pair(tokens_a, tokens_b, max_num_tokens):
@@ -303,8 +355,8 @@ def create_pairs_from_document(
     # The `target_seq_length` is just a rough target however, whereas
     # `max_seq_length` is a hard limit.
     target_seq_length = max_num_tokens
-    if random.random() < short_seq_prob:
-        target_seq_length = random.randint(2, max_num_tokens)
+    # if random.random() < short_seq_prob:
+    #     target_seq_length = random.randint(2, max_num_tokens)
 
     # We DON'T just concatenate all of the tokens from a document into a long
     # sequence and choose an arbitrary split point because this would make the
@@ -321,8 +373,6 @@ def create_pairs_from_document(
         current_length += len(segment)
         if i == len(document) - 1 or current_length >= target_seq_length:
             if current_chunk:
-                # `a_end` is how many segments from `current_chunk` go into the `A`
-                # (first) sentence.
                 if current_length > max_num_tokens and len(current_chunk) > 1:
                     end = len(current_chunk) - 1
                     stay_chunk_idx = [-1]
@@ -343,6 +393,7 @@ def create_pairs_from_document(
                     "num_tokens": len(tokens_code),
                 }
                 instances.append(instance)
+                break
             current_chunk = [current_chunk[i] for i in stay_chunk_idx]
             current_length = (
                 sum([len(item) for item in current_chunk]) if current_chunk else 0
@@ -354,15 +405,11 @@ def create_pairs_from_document(
 
 def _get_pairs(
     code_path=None,
-    wikipedia_path=None,
-    books_path=None,
-    common_crawl_path=None,
-    wikipedia_lang="en",
     target_seq_length=128,
     short_seq_prob=0.1,
     blocksize=None,
     num_blocks=None,
-    duplicate_factor=5,
+    duplicate_factor=1,
     sample_ratio=0.9,
     seed=12345,
     tokenizer=None,
@@ -545,10 +592,6 @@ def main(args):
     tic = time.perf_counter()
     pairs = _get_pairs(
         code_path=args.code,
-        wikipedia_path=args.wikipedia,
-        books_path=args.books,
-        common_crawl_path=args.common_crawl,
-        wikipedia_lang=args.wikipedia_lang,
         target_seq_length=args.target_seq_length,
         short_seq_prob=args.short_seq_prob,
         blocksize=args.block_size,
