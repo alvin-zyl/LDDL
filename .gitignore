@@ -145,3 +145,9 @@ data/
 codebert_100000
 .vscode
 target_path
+
+# vscode
+*.code-workspace
+
+# ipynb
+*.ipynb
