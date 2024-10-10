@@ -44,7 +44,7 @@ from ..readers import (
     read_common_crawl,
     split_id_text,
     estimate_block_size,
-    split_id_code_comment,
+    split_id_code_docstring,
 )
 from lddl.utils import (
     expand_outdir_and_mkdir,
@@ -55,6 +55,7 @@ from lddl.utils import (
 from lddl.download.utils import parse_str_of_num_bytes
 
 from .binning import to_textfiles_binned, to_dataframe_binned, to_parquet_binned
+from typing import Union, List
 
 
 class Sentence:
@@ -71,12 +72,11 @@ class Sentence:
 
 class Document:
 
-    def __init__(self, doc_id, sentences):
-        self._id = doc_id
+    def __init__(self, sentences):
         self._sentences = sentences
 
     def __repr__(self):
-        return "Document(_id={}, _sentences={})".format(self._id, self._sentences)
+        return "Document(_sentences={})".format(self._sentences)
 
     def __len__(self):
         return len(self._sentences)
@@ -87,84 +87,78 @@ class Document:
 
 class CodePair:
 
-    def __init__(self, doc_id, sentences, comment):
-        self._id = doc_id
-        self._sentences = sentences
-        self._comment = comment
+    def __init__(self, code_pair_id, codes: Document, docstrings: Document):
+        self._id = code_pair_id
+        self._codes = codes
+        self._docstrings = docstrings
+
+        assert isinstance(codes, Document)
+        assert isinstance(docstrings, Document)
 
     def __repr__(self):
-        return "Code(_id={}, _comment={}, _sentences={})".format(
-            self._id, self._comment, self._sentences
+        return "Code(_id={}, _codes={}, _docstring={})".format(
+            self._id, self._codes, self._docstrings
         )
 
     def __len__(self):
-        return len(self._sentences)
+        return len(self._codes)
 
-    def __getitem__(self, idx):
-        return self._sentences[idx]
+    def __getitem__(self, idx) -> Sentence:
+        return self._codes[idx]
+
+    def get_doc_segment(self, idx) -> Sentence:
+        return self._docstrings[idx]
+
+    @property
+    def num_doc_segments(self):
+        return len(self._docstrings)
 
 
 def split_code(code, separator="\n"):
     return code.split(separator)
 
 
-def _get_documents(bag_texts, tokenizer, max_length=512):
+def _get_code_pairs(bag_texts: db.Bag, tokenizer, max_length=512):
 
     def _tokenize(s):
         return tokenizer.tokenize(s, max_length=max_length, truncation=True)
 
-    def _to_document(raw_text):
-        doc_id, text = split_id_text(raw_text)
-        sentence_strs = filter(
+    def _to_code_pair(raw_text) -> CodePair:
+        code_pair_id, docstring, code = split_id_code_docstring(raw_text)
+        doc_strs = filter(
             None,
             map(
-                lambda s: s.replace("\r\n", "").strip(),
-                [text],
+                lambda s: s.strip(),
+                split_code(docstring),
             ),
         )
-
-        sentences = (
-            Sentence(tuple(tokens))
-            for tokens in (_tokenize(sentence_str) for sentence_str in sentence_strs)
-            if len(tokens) > 0
-        )
-
-        document = Document(doc_id, tuple(sentences))
-        return document
-
-    return bag_texts.map(_to_document).filter(lambda d: len(d._sentences) > 0)
-
-
-def _get_code_pairs(bag_texts, tokenizer, max_length=512):
-
-    def _tokenize(s):
-        return tokenizer.tokenize(s, max_length=max_length, truncation=True)
-
-    def _to_code_pair(raw_text):
-        doc_id, comment, code = split_id_code_comment(raw_text)
-        sentence_strs = filter(
+        code_strs = filter(
             None,
             map(
-                lambda s: s.replace("\r\n", "").strip(),
+                lambda s: s.strip(),
                 split_code(code),
             ),
         )
 
-        sentences = (
+        doc_sentences = (
             Sentence(tuple(tokens))
-            for tokens in (_tokenize(sentence_str) for sentence_str in sentence_strs)
+            for tokens in (_tokenize(doc_str) for doc_str in doc_strs)
             if len(tokens) > 0
         )
-        comment = Sentence(tuple(_tokenize(comment)))
+        code_sentences = (
+            Sentence(tuple(tokens))
+            for tokens in (_tokenize(code_str) for code_str in code_strs)
+            if len(tokens) > 0
+        )
 
         document = CodePair(
-            doc_id,
-            tuple(sentences),
-            comment,
+            code_pair_id,
+            Document(tuple(code_sentences)),
+            Document(tuple(doc_sentences)),
         )
         return document
 
-    return bag_texts.map(_to_code_pair).filter(lambda d: len(d._sentences) > 0)
+    return bag_texts.map(_to_code_pair).filter(lambda d: len(d) > 0)
 
 
 def _shuffle_bag_texts(bag_texts):
@@ -247,9 +241,18 @@ def _truncate_seq(tokens, max_num_tokens):
 
         # We want to sometimes truncate from the front and sometimes from the
         # back to add more randomness and avoid biases.
-        # if random.random() < 0.5:
-        #     del tokens[0]
-        # else:
+        if random.random() < 0.5:
+            del tokens[0]
+        else:
+            tokens.pop()
+
+
+def _truncate_seq_deter(tokens, max_num_tokens):
+    while True:
+        total_length = len(tokens)
+        if total_length <= max_num_tokens:
+            break
+
         tokens.pop()
 
 
@@ -277,7 +280,12 @@ MaskedLmInstance = namedtuple("MaskedLmInstance", ["index", "label"])
 def create_masked_lm_predictions(tokens_a, tokens_b, masked_lm_ratio, vocab_words):
     """Creates the predictions for the masked LM objective."""
     num_tokens_a, num_tokens_b = len(tokens_a), len(tokens_b)
-    tokens = ["[CLS]"] + tokens_a + ["[SEP]"] + tokens_b + ["[SEP]"]
+    tokens = (
+        ["[CLS]"]
+        + ((tokens_a + ["[SEP]"]) if tokens_a else tokens_a)
+        + tokens_b
+        + ["[SEP]"]
+    )
 
     cand_indexes = []
     for i, token in enumerate(tokens):
@@ -333,8 +341,8 @@ def create_masked_lm_predictions(tokens_a, tokens_b, masked_lm_ratio, vocab_word
 
 
 def create_pairs_from_document(
-    all_documents,
-    document_index,
+    all_documents: List[CodePair],
+    document_index: int,
     max_seq_length=128,
     short_seq_prob=0.1,
     masking=False,
@@ -344,8 +352,10 @@ def create_pairs_from_document(
     """Create a pair for a single document."""
     document = all_documents[document_index]
 
-    # Account for [CLS], [SEP], [SEP]
-    max_num_tokens = max_seq_length - 2
+    # Account for [CLS], [SEP], [SEP] if docstring exists, else [CLS], [SEP]
+    special_token_length = 3 if document.num_doc_segments else 2
+    max_num_tokens = max_seq_length - special_token_length
+    max_doc_seq_length = 64 if max_seq_length >= 512 else 32
 
     # We *usually* want to fill up the entire sequence since we are padding
     # to `max_seq_length` anyways, so short sequences are generally wasted
@@ -355,49 +365,78 @@ def create_pairs_from_document(
     # The `target_seq_length` is just a rough target however, whereas
     # `max_seq_length` is a hard limit.
     target_seq_length = max_num_tokens
-    # if random.random() < short_seq_prob:
-    #     target_seq_length = random.randint(2, max_num_tokens)
+    short_seq_p = random.random()
 
-    # We DON'T just concatenate all of the tokens from a document into a long
-    # sequence and choose an arbitrary split point because this would make the
-    # next sentence prediction task too easy. Instead, we split the input into
-    # segments "A" and "B" based on the actual "sentences" provided by the user
-    # input.
-    instances = []
-    current_chunk = []
+    i = 0
+    doc_tokens = []
+    current_chunk: List[Sentence] = []
     current_length = 0
+    # In 10% of the time, we directly use the first sentence as doc
+    if document.num_doc_segments and short_seq_p < short_seq_prob:
+        doc_tokens.extend(document.get_doc_segment(0)._tokens)
+    else:
+        while i < document.num_doc_segments:
+            segment = document.get_doc_segment(i)
+            current_chunk.append(segment)
+            current_length += len(segment)
+            if i == len(document) - 1 or current_length > max_doc_seq_length:
+                if current_chunk:
+                    if current_length > max_doc_seq_length and len(current_chunk) > 1:
+                        end = len(current_chunk) - 1
+                    else:
+                        end = len(current_chunk)
+
+                    for j in range(end):
+                        doc_tokens.extend(current_chunk[j]._tokens)
+
+                    _truncate_seq(doc_tokens, max_doc_seq_length)
+
+                    break
+
+            i += 1
+
+    # For the same function, we split the code by "\n" into sentences,
+    # the docstring could be paired with different parts of the complete code
+    instances = []
+    current_chunk: List[Sentence] = []
+    doc_length = len(doc_tokens)
+    current_length = doc_length  # Current length is alwasy on top of doc length
+
     i = 0
     while i < len(document):
         segment = document[i]
         current_chunk.append(segment)
         current_length += len(segment)
-        if i == len(document) - 1 or current_length >= target_seq_length:
+        if i == len(document) - 1 or current_length > target_seq_length:
             if current_chunk:
                 if current_length > max_num_tokens and len(current_chunk) > 1:
-                    end = len(current_chunk) - 1
                     stay_chunk_idx = [-1]
                 else:
-                    end = len(current_chunk)
                     stay_chunk_idx = []
 
-                tokens_code = []
-                for j in range(end):
-                    tokens_code.extend(current_chunk[j]._tokens)
+                code_tokens = []
+                for j in range(len(current_chunk)):
+                    code_tokens.extend(current_chunk[j]._tokens)
 
-                _truncate_seq(tokens_code, max_num_tokens)
+                _truncate_seq(code_tokens, max_num_tokens - doc_length)
 
-                assert len(tokens_code) >= 1
+                assert len(code_tokens) >= 1
 
-                instance = {
-                    "code": " ".join(tokens_code),
-                    "num_tokens": len(tokens_code),
-                }
-                instances.append(instance)
-                break
+                if not instances or len(code_tokens) >= 16:
+                    instance = {
+                        "id": document._id,
+                        "doc": " ".join(doc_tokens),
+                        "code": " ".join(code_tokens),
+                        "num_tokens": len(doc_tokens)
+                        + len(code_tokens)
+                        + special_token_length,
+                    }
+                    instances.append(instance)
+
             current_chunk = [current_chunk[i] for i in stay_chunk_idx]
             current_length = (
                 sum([len(item) for item in current_chunk]) if current_chunk else 0
-            )
+            ) + doc_length
         i += 1
 
     return instances
@@ -446,7 +485,7 @@ def _get_pairs(
         bags.append(read_code(code_path, sample_ratio=sample_ratio, sample_seed=seed))
     bag_texts = db.concat(bags)
     bag_texts = _shuffle_bag_texts(bag_texts)
-    bag_documents = _get_documents(bag_texts, tokenizer)
+    bag_documents = _get_code_pairs(bag_texts, tokenizer)
     return bag_documents.map_partitions(_to_partition_pairs)
 
 
@@ -458,10 +497,14 @@ def _save_parquet(
     masking=False,
 ):
     base_meta = {
+        "id": str,
+        "doc": str,
         "code": str,
         "num_tokens": int,
     }
     base_schema = {
+        "id": pa.string(),
+        "doc": pa.string(),
         "code": pa.string(),
         "num_tokens": pa.uint16(),
     }
@@ -501,27 +544,14 @@ def _save_txt(
     target_seq_length=128,
     masking=False,
 ):
-    if masking:
-        pairs = pairs.map(
-            lambda p: "is_random_next: {} - [CLS] {} [SEP] {} [SEP] "
-            "- masked_lm_positions: {} - masked_lm_labels: {} - {}".format(
-                p["is_random_next"],
-                p["A"],
-                p["B"],
-                deserialize_np_array(p["masked_lm_positions"]),
-                p["masked_lm_labels"],
-                p["num_tokens"],
-            )
+    pairs = pairs.map(
+        lambda p: "{} [CLS] {} [SEP] {} [SEP] - {}".format(
+            p["id"],
+            p["doc"],
+            p["code"],
+            p["num_tokens"],
         )
-    else:
-        pairs = pairs.map(
-            lambda p: "is_random_next: {} - [CLS] {} [SEP] {} [SEP] - {}".format(
-                p["is_random_next"],
-                p["A"],
-                p["B"],
-                p["num_tokens"],
-            )
-        )
+    )
     if bin_size is None:
         db.core.to_textfiles(pairs, os.path.join(path, "*.txt"))
     else:
@@ -584,10 +614,7 @@ def main(args):
         )
 
     nltk.download("punkt")
-    if os.path.isfile(args.vocab_file):
-        tokenizer = transformers.BertTokenizerFast(args.vocab_file)
-    else:
-        tokenizer = transformers.BertTokenizerFast.from_pretrained(args.vocab_file)
+    tokenizer = transformers.AutoTokenizer.from_pretrained("microsoft/codebert-base")
 
     tic = time.perf_counter()
     pairs = _get_pairs(
