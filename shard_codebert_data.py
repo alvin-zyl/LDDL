@@ -1,14 +1,14 @@
 import pickle, transformers, tqdm, os
 import numpy as np
 
-code, id, comment = pickle.load(open("/dataset/codebert/extracted_pair_raw.pkl", "rb"))
-concated = [" ".join(item) for item in zip(id, code)]
+id, comment, code = pickle.load(open("/datasets/codebert/extracted_train.pkl", "rb"))
+concated = ["<CODESPLIT>".join(item) for item in zip(id, comment, code)]
 num_codes = len(concated)
 np.random.seed(12345)
 shuffled_idx = np.random.choice(num_codes, num_codes, False)
 num_blocks = 4096
 block_size = (num_codes // num_blocks) + 1
-output_dir = "/dataset/codebert/source"
+output_dir = "/datasets/codebert/source"
 linedelimiter = "\r\n"
 
 for i in range(num_blocks):
